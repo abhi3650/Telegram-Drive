@@ -28,6 +28,7 @@ You can use this bot to upload files to your TG Drive website directly instead o
 """
 
 SET_FOLDER_PATH_CACHE = {}
+SET_FOLDER_PENDING_USERS = {}
 DRIVE_DATA = None
 BOT_MODE = None
 ZIP_SESSIONS = {}
@@ -157,6 +158,50 @@ async def send_drive_links(message: Message, file_name, file_size, storage_msg_i
         disable_web_page_preview=True
     )
 
+
+
+def _get_matching_folders(folder_name: str):
+    """Return folders whose names match the query (case-insensitive)."""
+    if not folder_name:
+        return {}
+
+    search_result = DRIVE_DATA.search_file_folder(folder_name)
+    folders = {}
+    for item in search_result.values():
+        if item.type == "folder":
+            folders[item.id] = item
+    return folders
+
+
+async def _send_folder_selector(message: Message, folder_name: str):
+    global SET_FOLDER_PATH_CACHE
+
+    folders = _get_matching_folders(folder_name)
+    if len(folders) == 0:
+        await message.reply_text(f"No folder found with name: {folder_name}")
+        return
+
+    buttons = []
+    folder_cache = {}
+    folder_cache_id = int(time.time() * 1000)
+
+    for folder in folders.values():
+        path = folder.path.strip("/")
+        folder_path = "/" + ("/" + path + "/" + folder.id).strip("/")
+        folder_cache[folder.id] = (folder_path, folder.name)
+        buttons.append([
+            InlineKeyboardButton(
+                folder.name,
+                callback_data=f"set_folder_{folder_cache_id}_{folder.id}",
+            )
+        ])
+
+    SET_FOLDER_PATH_CACHE[folder_cache_id] = folder_cache
+    await message.reply_text(
+        "Select the folder where you want to upload files",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
 @main_bot.on_message(
     filters.command(["start", "help"])
     & filters.private
@@ -180,11 +225,21 @@ async def zip_cmd_handler(client: Client, message: Message):
     & filters.user(config.TELEGRAM_ADMIN_IDS),
 )
 async def cancel_handler(client: Client, message: Message):
-    if message.from_user.id in ZIP_SESSIONS:
-        del ZIP_SESSIONS[message.from_user.id]
-        await message.reply_text("❌ Zip session cancelled.")
+    user_id = message.from_user.id
+    cancelled = False
+
+    if user_id in ZIP_SESSIONS:
+        del ZIP_SESSIONS[user_id]
+        cancelled = True
+
+    if user_id in SET_FOLDER_PENDING_USERS:
+        del SET_FOLDER_PENDING_USERS[user_id]
+        cancelled = True
+
+    if cancelled:
+        await message.reply_text("Cancelled current operation.")
     else:
-        await message.reply_text("⚠️ No active zip session.")
+        await message.reply_text("⚠️ No active operation.")
 
 @main_bot.on_message(
     filters.command("done")
@@ -333,50 +388,41 @@ async def done_handler(client: Client, message: Message):
     & filters.user(config.TELEGRAM_ADMIN_IDS),
 )
 async def set_folder_handler(client: Client, message: Message):
-    global SET_FOLDER_PATH_CACHE, DRIVE_DATA
-    while True:
-        try:
-            folder_name = await message.ask(
-                "Send the folder name where you want to upload files\n\n/cancel to cancel",
-                timeout=60,
-                filters=filters.text,
-            )
-        except asyncio.TimeoutError:
-            await message.reply_text("Timeout\n\nUse /set_folder to set folder again")
-            return
-        if folder_name.text.lower() == "/cancel":
-            await message.reply_text("Cancelled")
-            return
-        folder_name = folder_name.text.strip()
-        search_result = DRIVE_DATA.search_file_folder(folder_name)
-        folders = {}
-        for item in search_result.values():
-            if item.type == "folder":
-                folders[item.id] = item
-        if len(folders) == 0:
-            await message.reply_text(f"No Folder found with name {folder_name}")
-        else:
-            break
-    buttons = []
-    folder_cache = {}
-    folder_cache_id = len(SET_FOLDER_PATH_CACHE) + 1
-    for folder in search_result.values():
-        path = folder.path.strip("/")
-        folder_path = "/" + ("/" + path + "/" + folder.id).strip("/")
-        folder_cache[folder.id] = (folder_path, folder.name)
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    folder.name,
-                    callback_data=f"set_folder_{folder_cache_id}_{folder.id}",
-                )
-            ]
-        )
-    SET_FOLDER_PATH_CACHE[folder_cache_id] = folder_cache
+    global SET_FOLDER_PENDING_USERS
+
+    if len(message.command) > 1:
+        folder_name = " ".join(message.command[1:]).strip()
+        await _send_folder_selector(message, folder_name)
+        return
+
+    SET_FOLDER_PENDING_USERS[message.from_user.id] = True
     await message.reply_text(
-        "Select the folder where you want to upload files",
-        reply_markup=InlineKeyboardMarkup(buttons),
+        "Send the folder name where you want to upload files.\n\n"
+        "Example: /set_folder Movies\n"
+        "Or just send the folder name as plain text.\n"
+        "Use /cancel to cancel."
     )
+
+
+@main_bot.on_message(
+    filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS)
+    & filters.text
+    & ~filters.command(["start", "help", "zip", "done", "cancel", "set_folder", "current_folder"]),
+)
+async def set_folder_text_handler(client: Client, message: Message):
+    global SET_FOLDER_PENDING_USERS
+
+    if not SET_FOLDER_PENDING_USERS.get(message.from_user.id):
+        return
+
+    folder_name = message.text.strip()
+    if folder_name == "":
+        await message.reply_text("Folder name cannot be empty")
+        return
+
+    del SET_FOLDER_PENDING_USERS[message.from_user.id]
+    await _send_folder_selector(message, folder_name)
 
 @main_bot.on_callback_query(
     filters.user(config.TELEGRAM_ADMIN_IDS) & filters.regex(r"set_folder_")
@@ -389,7 +435,12 @@ async def set_folder_callback(client: Client, callback_query: Message):
         await callback_query.answer("Request Expired, Send /set_folder again")
         await callback_query.message.delete()
         return
-    folder_path, name = folder_path_cache.get(folder_id)
+    folder_meta = folder_path_cache.get(folder_id)
+    if folder_meta is None:
+        await callback_query.answer("Invalid folder selection, send /set_folder again")
+        await callback_query.message.delete()
+        return
+    folder_path, name = folder_meta
     del SET_FOLDER_PATH_CACHE[int(folder_cache_id)]
     BOT_MODE.set_folder(folder_path, name)
     await callback_query.answer(f"Folder Set Successfully To : {name}")

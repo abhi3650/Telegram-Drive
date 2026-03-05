@@ -15,6 +15,29 @@ from utils.uploader import start_file_uploader
 from utils.logger import Logger
 import urllib.parse
 
+
+def _normalize_item_name(name: str) -> str:
+    return name.strip()
+
+
+def _validate_item_name(name: str) -> str:
+    normalized_name = _normalize_item_name(name)
+    if normalized_name == "":
+        return "Name cannot be empty"
+    if "/" in normalized_name or "\\" in normalized_name:
+        return "Name cannot contain '/' or '\\'"
+    return None
+
+
+def _item_name_exists(directory_contents: dict, item_type: str, name: str, ignore_id: str = None) -> bool:
+    target_name = name.lower()
+    for item_id, item in directory_contents.items():
+        if ignore_id and item_id == ignore_id:
+            continue
+        if item.type == item_type and item.name.lower() == target_name:
+            return True
+    return False
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     reset_cache_dir()
@@ -70,15 +93,17 @@ async def api_new_folder(request: Request):
     if data.get("password") != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
+    folder_name = _normalize_item_name(data.get("name", ""))
+    validation_error = _validate_item_name(folder_name)
+    if validation_error:
+        return JSONResponse({"status": validation_error})
+
     logger.info(f"createNewFolder {data}")
     folder_data = DRIVE_DATA.get_directory(data["path"]).contents
-    for id in folder_data:
-        f = folder_data[id]
-        if f.type == "folder":
-            if f.name == data["name"]:
-                return JSONResponse({"status": "Folder with the name already exist in current directory"})
+    if _item_name_exists(folder_data, "folder", folder_name):
+        return JSONResponse({"status": "Folder with the same name already exists in current directory"})
 
-    DRIVE_DATA.new_folder(data["path"], data["name"])
+    DRIVE_DATA.new_folder(data["path"], folder_name)
     return JSONResponse({"status": "ok"})
 
 
@@ -208,7 +233,24 @@ async def rename_file_folder(request: Request):
     data = await request.json()
     if data.get("password") != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
-    DRIVE_DATA.rename_file_folder(data["path"], data["name"])
+    new_name = _normalize_item_name(data.get("name", ""))
+    validation_error = _validate_item_name(new_name)
+    if validation_error:
+        return JSONResponse({"status": validation_error})
+
+    item_path = data["path"].strip("/").split("/")
+    item_id = item_path[-1]
+    parent_path = "/" + "/".join(item_path[:-1]) if len(item_path) > 1 else "/"
+
+    parent_folder = DRIVE_DATA.get_directory(parent_path)
+    target_item = parent_folder.contents.get(item_id)
+    if target_item is None:
+        return JSONResponse({"status": "File/Folder not found"})
+
+    if _item_name_exists(parent_folder.contents, target_item.type, new_name, ignore_id=item_id):
+        return JSONResponse({"status": f"{target_item.type.title()} with the same name already exists in current directory"})
+
+    DRIVE_DATA.rename_file_folder(data["path"], new_name)
     return JSONResponse({"status": "ok"})
 
 
