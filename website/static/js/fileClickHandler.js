@@ -1,11 +1,13 @@
 function openFolder() {
-    let path = (getCurrentPath() + '/' + this.getAttribute('data-id') + '/').replaceAll('//', '/')
+    const path = (getCurrentPath() + '/' + this.getAttribute('data-id') + '/').replaceAll('//', '/')
 
+    const params = new URLSearchParams({ path })
     const auth = getFolderAuthFromPath()
     if (auth) {
-        path = path + '&auth=' + auth
+        params.set('auth', auth)
     }
-    window.location.href = `/?path=${path}`
+
+    window.location.href = `/?${params.toString()}`
 }
 
 function openFile() {
