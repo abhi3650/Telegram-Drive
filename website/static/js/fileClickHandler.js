@@ -38,23 +38,23 @@ function openMoreButton(div) {
     const isTrash = getCurrentPath().includes('/trash')
 
     moreDiv.querySelector('.more-options-focus').focus()
-    moreDiv.querySelector('.more-options-focus').addEventListener('blur', closeMoreBtnFocus);
-    moreDiv.querySelector('.more-options-focus').addEventListener('focusout', closeMoreBtnFocus);
+    moreDiv.querySelector('.more-options-focus').onblur = closeMoreBtnFocus;
+    moreDiv.querySelector('.more-options-focus').onfocusout = closeMoreBtnFocus;
     if (!isTrash) {
-        moreDiv.querySelector(`#rename-${id}`).addEventListener('click', renameFileFolder)
-        moreDiv.querySelector(`#trash-${id}`).addEventListener('click', trashFileFolder)
+        moreDiv.querySelector(`#rename-${id}`).onclick = renameFileFolder
+        moreDiv.querySelector(`#trash-${id}`).onclick = trashFileFolder
         try {
-            moreDiv.querySelector(`#share-${id}`).addEventListener('click', shareFile)
+            moreDiv.querySelector(`#share-${id}`).onclick = shareFile
         }
         catch { }
         try {
-            moreDiv.querySelector(`#folder-share-${id}`).addEventListener('click', shareFolder)
+            moreDiv.querySelector(`#folder-share-${id}`).onclick = shareFolder
         }
         catch { }
     }
     else {
-        moreDiv.querySelector(`#restore-${id}`).addEventListener('click', restoreFileFolder)
-        moreDiv.querySelector(`#delete-${id}`).addEventListener('click', deleteFileFolder)
+        moreDiv.querySelector(`#restore-${id}`).onclick = restoreFileFolder
+        moreDiv.querySelector(`#delete-${id}`).onclick = deleteFileFolder
     }
 }
 
